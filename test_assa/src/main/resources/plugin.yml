@@ -1,0 +1,14 @@
+name: test_assa
+version: 1.0
+main: org.assasin.test_assa.Main
+api-version: 1.20 # Ustaw wersję pasującą do Twojego serwera (np. 1.19, 1.20)
+commands:
+  kit:
+    description: Wybierz klase postaci.
+  statsadmin:
+    description: Zarzadzaj statystykami.
+  leave:
+    description: Opuscz tryb FFA.
+  spawn:
+    description: Teleportacja na spawn główny.
+    usage: /spawn
