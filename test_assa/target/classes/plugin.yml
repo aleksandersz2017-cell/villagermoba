@@ -1,14 +1,39 @@
 name: test_assa
 version: 1.0
 main: org.assasin.test_assa.Main
-api-version: 1.20 # Ustaw wersję pasującą do Twojego serwera (np. 1.19, 1.20)
+api-version: 1.20
+
 commands:
+  test_assa:
+    description: Glowna komenda administracyjna pluginu
+    permission: test_assa.admin
   kit:
     description: Wybierz klase postaci.
   statsadmin:
     description: Zarzadzaj statystykami.
+    permission: op
   leave:
-    description: Opuscz tryb FFA.
+    description: Opusc tryb FFA lub kolejke.
   spawn:
     description: Teleportacja na spawn główny.
     usage: /spawn
+  tvt:
+    description: Komenda zarządzania trybem TvT.
+    permission: op
+  recall:
+    description: Powrót do bazy drużynowej po 5 sekundach (tylko w TvT).
+  spawnbank:
+    description: Przywołuje świnię Bank z dżungli na Twojej pozycji.
+    permission: op
+  spawnzombiehorse:
+    description: Spawnuje zombie horse w dzungli.
+    permission: op
+  spawngiant:
+    description: Przywołuje specjalnego Giganta na Twojej pozycji.
+    permission: op
+  ff:
+    description: Surrender the TvT match
+    aliases: [ forfeit, surrender ]
+  tvtadmin:
+    description: Admin commands for managing TvT matches.
+    usage: /tvtadmin help

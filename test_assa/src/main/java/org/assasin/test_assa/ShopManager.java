@@ -36,20 +36,35 @@ public class ShopManager implements Listener {
     private final Map<UUID, Boolean> shadowStrikeEnabled = new HashMap<>();
     private final Map<UUID, Boolean> minotaurSpeedEnabled = new HashMap<>();
     private final Map<UUID, Boolean> paladinHealEnabled = new HashMap<>();
-    private final Map<UUID, Boolean> berserkerPassiveEnabled = new HashMap<>(); // NOWE
+    private final Map<UUID, Boolean> berserkerPassiveEnabled = new HashMap<>();
 
     public ShopManager(Main plugin) {
         this.plugin = plugin;
     }
 
     // --- ZARZĄDZANIE PUNKTAMI I STATYSTYKAMI ---
+
+    /** Dodaje dowolną ilość punktów waluty dla gracza (Player) */
+    public void addPoints(Player player, int amount) {
+        if (player == null) return;
+        addPoints(player.getUniqueId(), amount);
+    }
+
+    /** Dodaje dowolną ilość punktów waluty dla gracza (UUID) */
+    public void addPoints(UUID uuid, int amount) {
+        if (uuid == null) return;
+        points.put(uuid, getPoints(uuid) + amount);
+    }
+
     public void addKillPoint(Player killer) {
+        if (killer == null) return;
+        addPoints(killer.getUniqueId(), 1);
         UUID uuid = killer.getUniqueId();
-        points.put(uuid, points.getOrDefault(uuid, 0) + 1);
         totalKills.put(uuid, totalKills.getOrDefault(uuid, 0) + 1);
     }
 
     public void addDeath(Player victim) {
+        if (victim == null) return;
         UUID uuid = victim.getUniqueId();
         deaths.put(uuid, deaths.getOrDefault(uuid, 0) + 1);
     }
@@ -59,6 +74,7 @@ public class ShopManager implements Listener {
     }
 
     public void addKillstreak(Player player) {
+        if (player == null) return;
         UUID uuid = player.getUniqueId();
         int newStreak = getKillstreak(uuid) + 1;
         currentKillstreak.put(uuid, newStreak);
@@ -80,7 +96,7 @@ public class ShopManager implements Listener {
     public boolean hasShadowStrike(UUID uuid) { return shadowStrikeEnabled.getOrDefault(uuid, false); }
     public boolean hasMinotaurSpeed(UUID uuid) { return minotaurSpeedEnabled.getOrDefault(uuid, false); }
     public boolean hasPaladinHeal(UUID uuid) { return paladinHealEnabled.getOrDefault(uuid, false); }
-    public boolean hasBerserkerPassive(UUID uuid) { return berserkerPassiveEnabled.getOrDefault(uuid, false); } // NOWE
+    public boolean hasBerserkerPassive(UUID uuid) { return berserkerPassiveEnabled.getOrDefault(uuid, false); }
 
     // --- OBSŁUGA SKLEPU (GUI) ---
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -132,7 +148,6 @@ public class ShopManager implements Listener {
                 inv.setItem(13, createItem(Material.GHAST_TEAR, "§6§lHoly Breath",
                         Arrays.asList("§7Your prayer becomes stronger.", "§7Healing increased to §c2 hearts §7(from 1.5).", "", status)));
             }
-            // --- NOWA SEKCA DLA BERSERKERA ---
             else if (type == Material.GOLDEN_AXE) {
                 boolean bought = hasBerserkerPassive(p.getUniqueId());
                 String status = bought ? "§a§lPURCHASED" : "§fCost: §a10 Kills";
@@ -170,7 +185,7 @@ public class ShopManager implements Listener {
             buyMinotaurSpeed(p, 10);
         } else if (name.contains("Holy Breath")) {
             buyPaladinHeal(p, 10);
-        } else if (name.contains("Battle Frenzy")) { // NOWA OBSŁUGA
+        } else if (name.contains("Battle Frenzy")) {
             buyBerserkerPassive(p, 10);
         }
     }

@@ -7,26 +7,31 @@ import org.bukkit.entity.*;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
-import org.bukkit.potion.PotionEffect;
-import org.bukkit.potion.PotionEffectType;
+import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.util.Vector;
 
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 public class Berserker implements Listener {
 
     private final Main plugin;
+
+    // Zamek na jeden tick - blokuje podwójne odpalenie PlayerInteractEvent
+    private final Set<UUID> interactLock = new HashSet<>();
 
     public Berserker(Main plugin) {
         this.plugin = plugin;
@@ -34,18 +39,18 @@ public class Berserker implements Listener {
 
     public void giveKit(Player p) {
         p.getInventory().clear();
-        // Dodaj to do każdej metody giveKit u każdego bohatera:
-        p.getAttribute(Attribute.GENERIC_ATTACK_SPEED).setBaseValue(4.0);
+
         p.getAttribute(Attribute.GENERIC_MAX_HEALTH).setBaseValue(28.0);
         p.setHealth(28.0);
-        p.getAttribute(Attribute.GENERIC_ATTACK_SPEED).setBaseValue(100.0);
-        p.getAttribute(Attribute.GENERIC_ARMOR).setBaseValue(8.0);
+        p.getAttribute(Attribute.GENERIC_ARMOR).setBaseValue(10.0);
 
-        // SLOTY
+        // Zostawiamy standardową bazę gry (1.0), by nie psuć przeliczania dmg w silniku Minecrafta
+        p.getAttribute(Attribute.GENERIC_ATTACK_DAMAGE).setBaseValue(1.0);
+
         p.getInventory().setItem(0, createBerserkerAxe());
         p.getInventory().setItem(1, createChainItem(1));
         p.getInventory().setItem(2, createWhirlwindItem(1));
-        p.getInventory().setItem(3, createLeapItem(1)); // NOWA ABILITKA
+        p.getInventory().setItem(3, createLeapItem(1));
         p.getInventory().setItem(4, new ItemStack(Material.COOKED_PORKCHOP, 64));
         p.getInventory().setItem(8, createShopItem());
 
@@ -54,10 +59,64 @@ public class Berserker implements Listener {
         p.getInventory().setLeggings(createCosmeticArmor(Material.LEATHER_LEGGINGS, EquipmentSlot.LEGS));
         p.getInventory().setBoots(createCosmeticArmor(Material.LEATHER_BOOTS, EquipmentSlot.FEET));
 
-        p.sendMessage("§8» §4§lWYBRANO KLASĘ: BERSERKER");
+        p.sendMessage("§8» §4§lCLASS SELECTED: BERSERKER");
     }
 
-    // --- ABILITKA 3: SKOK SZAŁU (NOWE) ---
+    // Pomocnicza metoda do zadawania obrażeń z umiejętności (omija blokadę braku topora)
+    private void damageFromAbility(LivingEntity victim, Player attacker, double damage) {
+        victim.setMetadata("ability_damage", new FixedMetadataValue(plugin, true));
+        victim.damage(damage, attacker);
+        victim.removeMetadata("ability_damage", plugin);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onAttack(EntityDamageByEntityEvent e) {
+        if (!(e.getDamager() instanceof Player)) return;
+
+        Player p = (Player) e.getDamager();
+
+        // Jeśli obrażenia pochodzą z umiejętności (oznaczone wyżej), przepuszczamy je bez przeszkód!
+        if (e.getEntity().hasMetadata("ability_damage")) {
+            return;
+        }
+
+        // Sprawdzamy czy gracze gra klasą Berserker
+        ItemStack slotZero = p.getInventory().getItem(0);
+        boolean isBerserkerClass = slotZero != null
+                && slotZero.hasItemMeta()
+                && "§4§lRage Axe".equals(slotZero.getItemMeta().getDisplayName());
+
+        if (isBerserkerClass) {
+            ItemStack mainHand = p.getInventory().getItemInMainHand();
+            boolean hasBerserkerAxe = mainHand != null
+                    && mainHand.getType() == Material.GOLDEN_AXE
+                    && mainHand.hasItemMeta()
+                    && "§4§lRage Axe".equals(mainHand.getItemMeta().getDisplayName());
+
+            // Jeśli bije czymś innym niż Rage Axe (np. z pustej łapki lub przedmiotu abilitki) - anulujemy fizyczny atak!
+            if (!hasBerserkerAxe) {
+                e.setCancelled(true);
+                return;
+            }
+
+            // Pasywka Berserkera (zwiększone obrażenia przy niskim zdrowiu)
+            if (plugin.shopManager != null && plugin.shopManager.hasBerserkerPassive(p.getUniqueId())) {
+                double maxHealth = p.getAttribute(Attribute.GENERIC_MAX_HEALTH).getValue();
+                double currentHealth = p.getHealth();
+                double ratio = (maxHealth - currentHealth) / maxHealth;
+                double bonus = ratio * 0.5;
+                e.setDamage(e.getDamage() * (1.0 + bonus));
+
+                if (ratio > 0.1) {
+                    e.getEntity().getWorld().spawnParticle(Particle.REDSTONE,
+                            e.getEntity().getLocation().add(0, 1, 0), 5, 0.2, 0.2, 0.2,
+                            new Particle.DustOptions(Color.RED, 1));
+                }
+            }
+        }
+    }
+
+    // --- ABILITKA 3: SKOK SZAŁU ---
     @EventHandler
     public void onLeapUse(PlayerInteractEvent e) {
         Player p = e.getPlayer();
@@ -67,18 +126,24 @@ public class Berserker implements Listener {
         if (!plugin.getPlayerClass(p.getUniqueId()).contains("Berserker")) return;
 
         e.setCancelled(true);
+
+        if (interactLock.contains(p.getUniqueId())) return;
+        interactLock.add(p.getUniqueId());
+        Bukkit.getScheduler().runTask(plugin, () -> interactLock.remove(p.getUniqueId()));
+
         if (item.getAmount() > 1) {
-            p.sendMessage("§cSkok będzie gotowy za: " + item.getAmount() + "s");
+            p.sendMessage("§cRage Leap will be ready in: " + item.getAmount() + "s");
             return;
         }
         activateLeap(p, item);
     }
 
     private void activateLeap(Player p, ItemStack item) {
-        p.sendMessage("§4§lRYK: SKOK!");
+        p.sendMessage("§4§lROAR: LEAP!");
 
-        // --- NOWE: Włączamy ochronę przed upadkiem ---
-        p.setMetadata("leap_fall_protection", new org.bukkit.metadata.FixedMetadataValue(plugin, true));
+        int slot = p.getInventory().getHeldItemSlot();
+
+        p.setMetadata("leap_fall_protection", new FixedMetadataValue(plugin, true));
 
         p.teleport(p.getLocation().add(0, 0.1, 0));
 
@@ -99,7 +164,7 @@ public class Berserker implements Listener {
             public void run() {
                 ticksInAir++;
                 if (!p.isOnline() || ticksInAir > 100) {
-                    p.removeMetadata("leap_fall_protection", plugin); // Czyścimy w razie błędu
+                    p.removeMetadata("leap_fall_protection", plugin);
                     this.cancel();
                     return;
                 }
@@ -109,22 +174,21 @@ public class Berserker implements Listener {
                 if (hadLeftGround && p.isOnGround() && ticksInAir > 5) {
                     Location landLoc = p.getLocation();
 
-                    // --- EFEKTY LĄDOWANIA (bez zmian) ---
                     p.getWorld().spawnParticle(Particle.EXPLOSION_HUGE, landLoc, 1);
                     p.getWorld().spawnParticle(Particle.BLOCK_CRACK, landLoc, 50, 1.2, 0.2, 1.2, Material.DIRT.createBlockData());
                     p.playSound(landLoc, Sound.ENTITY_GENERIC_EXPLODE, 1f, 0.7f);
 
-                    // DMG I STUN (bez zmian)
-                    for (Entity target : p.getNearbyEntities(2.5, 2.0, 2.5)) {
+                    for (Entity target : landLoc.getWorld().getNearbyEntities(landLoc, 3.5, 2.5, 3.5)) {
                         if (target instanceof LivingEntity && target != p) {
+                            if (plugin.isAlly(p, target)) continue;
+
                             LivingEntity victim = (LivingEntity) target;
-                            victim.damage(2.0, p);
-                            victim.addPotionEffect(new org.bukkit.potion.PotionEffect(org.bukkit.potion.PotionEffectType.SLOW, 20, 10, false, false));
-                            victim.addPotionEffect(new org.bukkit.potion.PotionEffect(org.bukkit.potion.PotionEffectType.BLINDNESS, 20, 0, false, false));
+                            damageFromAbility(victim, p, 2.0); // Zadanie DMG z abilitki
+                            plugin.applyStun(victim, 10);
+                            victim.setVelocity(new Vector(0, 0, 0));
                         }
                     }
 
-                    // --- NOWE: Wyłączamy ochronę 1 tick po wylądowaniu ---
                     new BukkitRunnable() {
                         @Override
                         public void run() {
@@ -137,23 +201,23 @@ public class Berserker implements Listener {
             }
         }.runTaskTimer(plugin, 2L, 1L);
 
-        startCooldown(p, item, 12);
+        startCooldown(p, slot, Material.RABBIT_FOOT, 12);
     }
+
     @EventHandler
     public void onFallDamage(org.bukkit.event.entity.EntityDamageEvent e) {
         if (!(e.getEntity() instanceof Player)) return;
         Player p = (Player) e.getEntity();
 
-        // Jeśli powód to upadek i gracz ma metadata ochrony
         if (e.getCause() == org.bukkit.event.entity.EntityDamageEvent.DamageCause.FALL) {
             if (p.hasMetadata("leap_fall_protection")) {
                 e.setCancelled(true);
-                // Opcjonalnie: mały efekt pyłu przy "miękkim" lądowaniu
                 p.getWorld().spawnParticle(Particle.CLOUD, p.getLocation(), 10, 0.2, 0.1, 0.2, 0.05);
             }
         }
     }
-    // --- ABILITKA 1: ŁAŃCUCH (Bez zmian) ---
+
+    // --- ABILITKA 1: ŁAŃCUCH ---
     @EventHandler
     public void onChainUse(PlayerInteractEvent event) {
         Player p = event.getPlayer();
@@ -162,16 +226,29 @@ public class Berserker implements Listener {
         if (event.getHand() != EquipmentSlot.HAND) return;
         if (!plugin.getPlayerClass(p.getUniqueId()).contains("Berserker")) return;
         event.setCancelled(true);
+
+        if (interactLock.contains(p.getUniqueId())) return;
+        interactLock.add(p.getUniqueId());
+        Bukkit.getScheduler().runTask(plugin, () -> interactLock.remove(p.getUniqueId()));
+
         if (item.getAmount() > 1) {
-            p.sendMessage("§cŁańcuch będzie gotowy za: " + item.getAmount() + "s");
+            p.sendMessage("§cChain will be ready in: " + item.getAmount() + "s");
             return;
         }
         shootChain(p, item);
     }
 
     private void shootChain(Player p, ItemStack chainItem) {
+        int slot = p.getInventory().getHeldItemSlot();
+
+        int maxRange = 16;
+        if (plugin.tvtShopManager != null && plugin.tvtShopManager.hasTalent(p, "berserker_longer_chain")) {
+            maxRange = 25;
+        }
+        final int chainRange = maxRange;
+
         Location startLoc = p.getEyeLocation();
-        Vector direction = startLoc.getDirection().normalize();
+        Vector direction = startLoc.getDirection().normalize().multiply(3.0);
         ArmorStand projectile = p.getWorld().spawn(startLoc, ArmorStand.class, as -> {
             as.setVisible(false); as.setMarker(true); as.setGravity(false); as.setCanTick(true);
         });
@@ -181,28 +258,55 @@ public class Berserker implements Listener {
             int distance = 0;
             @Override
             public void run() {
-                distance++;
-                Location currentLoc = projectile.getLocation().add(direction);
+                distance += 3;
+                Location previousLoc = projectile.getLocation();
+                Location currentLoc = previousLoc.clone().add(direction);
                 projectile.teleport(currentLoc);
-                p.getWorld().spawnParticle(Particle.CRIT, currentLoc.add(0, 0.5, 0), 3, 0.1, 0.1, 0.1, 0.01);
-                p.getWorld().spawnParticle(Particle.ITEM_CRACK, currentLoc, 2, 0.1, 0.1, 0.1, 0.05, ironNugget);
+
+                Vector step = direction.clone().normalize().multiply(0.3);
+                Location trailLoc = previousLoc.clone();
+                double traveled = 0;
+                double segmentLength = direction.length();
+                while (traveled < segmentLength) {
+                    trailLoc.add(step);
+                    traveled += 0.3;
+                    p.getWorld().spawnParticle(Particle.CRIT, trailLoc.clone().add(0, 0.5, 0), 2, 0.05, 0.05, 0.05, 0.01);
+                    p.getWorld().spawnParticle(Particle.ITEM_CRACK, trailLoc, 1, 0.05, 0.05, 0.05, 0.02, ironNugget);
+                }
+
                 for (Entity entity : projectile.getNearbyEntities(0.8, 0.8, 0.8)) {
                     if (entity instanceof LivingEntity && entity != p && !(entity instanceof ArmorStand)) {
+                        if (plugin.isAlly(p, entity)) continue;
                         LivingEntity victim = (LivingEntity) entity;
-                        victim.damage(2.0, p);
-                        Location tpLoc = victim.getLocation().add(victim.getLocation().getDirection().multiply(-1.0));
-                        p.teleport(tpLoc.setDirection(direction));
+                        damageFromAbility(victim, p, 2.0); // Zadanie DMG z abilitki
+
+                        Vector dirToVictim = victim.getLocation().toVector().subtract(p.getLocation().toVector());
+
+                        if (dirToVictim.lengthSquared() < 0.01) {
+                            dirToVictim = p.getLocation().getDirection();
+                        }
+
+                        Vector approachDir = dirToVictim.clone().normalize();
+
+                        Location targetLoc = victim.getLocation().clone().subtract(approachDir.multiply(1.2));
+                        targetLoc.setY(victim.getLocation().getY());
+
+                        targetLoc.setDirection(approachDir);
+
+                        p.teleport(targetLoc);
                         p.playSound(p.getLocation(), Sound.ENTITY_IRON_GOLEM_ATTACK, 1f, 1.5f);
-                        projectile.remove(); this.cancel(); return;
+                        projectile.remove();
+                        this.cancel();
+                        return;
                     }
                 }
-                if (distance > 25 || projectile.getLocation().getBlock().getType().isSolid()) { projectile.remove(); this.cancel(); }
+                if (distance > chainRange || projectile.getLocation().getBlock().getType().isSolid()) { projectile.remove(); this.cancel(); }
             }
         }.runTaskTimer(plugin, 0L, 1L);
-        startCooldown(p, chainItem, 10);
+        startCooldown(p, slot, Material.CHAIN, 10);
     }
 
-    // --- ABILITKA 2: MŁYNEK (Bez zmian) ---
+    // --- ABILITKA 2: MŁYNEK ---
     @EventHandler
     public void onWhirlwind(PlayerInteractEvent e) {
         Player p = e.getPlayer();
@@ -211,27 +315,46 @@ public class Berserker implements Listener {
         if (e.getHand() != EquipmentSlot.HAND) return;
         if (!plugin.getPlayerClass(p.getUniqueId()).contains("Berserker")) return;
         e.setCancelled(true);
+
+        if (interactLock.contains(p.getUniqueId())) return;
+        interactLock.add(p.getUniqueId());
+        Bukkit.getScheduler().runTask(plugin, () -> interactLock.remove(p.getUniqueId()));
+
         if (item.getAmount() > 1) {
-            p.sendMessage("§c§l(!) §7Młynek będzie gotowy za: §f" + item.getAmount() + "s");
+            p.sendMessage("§c§l(!) §7Rage Whirlwind will be ready in: §f" + item.getAmount() + "s");
             return;
         }
         activateWhirlwind(p, item);
     }
 
     private void activateWhirlwind(Player p, ItemStack item) {
-        Pig steer = p.getWorld().spawn(p.getLocation(), Pig.class, pig -> {
-            pig.setInvisible(true); pig.setSaddle(true); pig.setInvulnerable(true); pig.setSilent(true);
-            pig.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, 70, 1, false, false));
-        });
-        steer.addPassenger(p);
-        p.sendMessage("§4§lSZAŁ BOJOWY: MŁYNEK!");
+        int slot = p.getInventory().getHeldItemSlot();
+
+        double slowRetain = 0.5;
+        if (plugin.tvtShopManager != null && plugin.tvtShopManager.hasTalent(p, "berserker_whirlwind_less_slow")) {
+            slowRetain = 0.75;
+        }
+        final double whirlwindSlowRetain = slowRetain;
+
+        p.sendMessage("§4§lBATTLE RAGE: WHIRLWIND!");
         p.playSound(p.getLocation(), Sound.ENTITY_ENDER_DRAGON_FLAP, 1f, 0.5f);
+
         new BukkitRunnable() {
             int ticks = 0;
             @Override
             public void run() {
-                if (ticks >= 60 || !p.isOnline() || steer.isDead() || p.getVehicle() == null) { steer.remove(); this.cancel(); return; }
-                if (p.getVehicle() == null || !p.getVehicle().equals(steer)) steer.addPassenger(p);
+                if (ticks >= 60 || !p.isOnline() || p.isSneaking()) {
+                    p.spigot().sendMessage(net.md_5.bungee.api.ChatMessageType.ACTION_BAR, net.md_5.bungee.api.chat.TextComponent.fromLegacyText("§7Whirlwind cancelled."));
+                    this.cancel();
+                    return;
+                }
+
+                p.spigot().sendMessage(net.md_5.bungee.api.ChatMessageType.ACTION_BAR, net.md_5.bungee.api.chat.TextComponent.fromLegacyText("§c§lPress shift to stop Whirlwind"));
+
+                Vector vel = p.getVelocity();
+                vel.multiply(whirlwindSlowRetain);
+                p.setVelocity(vel);
+
                 Location loc = p.getLocation();
                 if (ticks % 2 == 0) {
                     double angle = ticks * 0.8;
@@ -242,8 +365,10 @@ public class Berserker implements Listener {
                 if (ticks % 10 == 0) {
                     p.playSound(loc, Sound.ENTITY_PLAYER_ATTACK_SWEEP, 1f, 0.8f);
                     for (Entity target : p.getNearbyEntities(2.8, 2.0, 2.8)) {
-                        if (target instanceof LivingEntity && target != p && target != steer) {
-                            LivingEntity victim = (LivingEntity) target; victim.damage(1.5, p);
+                        if (target instanceof LivingEntity && target != p) {
+                            if (plugin.isAlly(p, target)) continue;
+                            LivingEntity victim = (LivingEntity) target;
+                            damageFromAbility(victim, p, 3.0); // Zadanie DMG z abilitki
                             Vector push = victim.getLocation().toVector().subtract(loc.toVector()).normalize().multiply(0.5).setY(0.2);
                             victim.setVelocity(push);
                         }
@@ -252,110 +377,144 @@ public class Berserker implements Listener {
                 ticks++;
             }
         }.runTaskTimer(plugin, 0L, 1L);
-        startCooldown(p, item, 15);
+        startCooldown(p, slot, Material.COBWEB, 15);
     }
 
     // --- PRZEDMIOTY ---
-    private ItemStack createLeapItem(int amount) {
-        ItemStack item = new ItemStack(Material.RABBIT_FOOT, amount);
-        ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName("§d§lSkok Szału §8(Prawy Klik)");
-        meta.setLore(Arrays.asList("§7Wyskakujesz w powietrze,", "§7przy lądowaniu §fOgłuszasz §7wrogów."));
-        item.setItemMeta(meta);
-        return item;
-    }
-
     private ItemStack createBerserkerAxe() {
         ItemStack axe = new ItemStack(Material.GOLDEN_AXE);
         ItemMeta meta = axe.getItemMeta();
-        meta.setDisplayName("§4§lTopór Szału");
-        meta.setUnbreakable(true);
-        meta.addAttributeModifier(Attribute.GENERIC_ATTACK_DAMAGE, new AttributeModifier(UUID.randomUUID(), "generic.attackDamage", 3.0, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlot.HAND));
-        meta.addAttributeModifier(Attribute.GENERIC_ATTACK_SPEED, new AttributeModifier(UUID.randomUUID(), "generic.attackSpeed", 100.0, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlot.HAND));
-        axe.setItemMeta(meta);
+        if (meta != null) {
+            meta.setDisplayName("§4§lRage Axe");
+            meta.setUnbreakable(true);
+
+            // Modyfikatory atrybutów przydzielające +2.0 DMG (łącznie 3.0 DMG z bazą) i brak cooldownu zamachu
+            meta.addAttributeModifier(Attribute.GENERIC_ATTACK_DAMAGE, new AttributeModifier(UUID.randomUUID(), "berserker_dmg", 2.0, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlot.HAND));
+            meta.addAttributeModifier(Attribute.GENERIC_ATTACK_SPEED, new AttributeModifier(UUID.randomUUID(), "berserker_speed", 100.0, AttributeModifier.Operation.ADD_NUMBER, EquipmentSlot.HAND));
+
+            meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+
+            List<String> lore = new ArrayList<>();
+            lore.add("");
+            lore.add("§7When in Main Hand:");
+            lore.add(" §23 Attack Damage");
+            lore.add(" §2Spam Click");
+            meta.setLore(lore);
+
+            axe.setItemMeta(meta);
+        }
         return axe;
+    }
+
+    private ItemStack createLeapItem(int amount) {
+        ItemStack item = new ItemStack(Material.RABBIT_FOOT, amount);
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName("§d§lRage Leap §8(Right Click)");
+
+            List<String> lore = new ArrayList<>();
+            lore.add("§7Launch into the air and slam down.");
+            lore.add("§7Deals §c2 damage §7and §eStuns §7nearby");
+            lore.add("§7enemies in a §f3.5-block §7radius.");
+            lore.add("§7Grants fall damage immunity.");
+            lore.add("§8Cooldown: §f12s");
+            meta.setLore(lore);
+
+            item.setItemMeta(meta);
+        }
+        return item;
     }
 
     private ItemStack createChainItem(int amount) {
         ItemStack item = new ItemStack(Material.CHAIN, amount);
         ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName("§7§lŻelazny Łańcuch §8(Prawy Klik)");
-        item.setItemMeta(meta);
+        if (meta != null) {
+            meta.setDisplayName("§7§lIron Chain §8(Right Click)");
+
+            List<String> lore = new ArrayList<>();
+            lore.add("§7Shoots a chain forwards.");
+            lore.add("§7On hit, deals §c2 damage §7and teleports");
+            lore.add("§7you to the targeted enemy.");
+            lore.add("§8Cooldown: §f10s");
+            meta.setLore(lore);
+
+            item.setItemMeta(meta);
+        }
         return item;
     }
 
     private ItemStack createWhirlwindItem(int amount) {
         ItemStack item = new ItemStack(Material.COBWEB, amount);
         ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName("§c§lMłynek Szału §8(Prawy Klik)");
-        item.setItemMeta(meta);
+        if (meta != null) {
+            meta.setDisplayName("§c§lRage Whirlwind §8(Right Click)");
+
+            List<String> lore = new ArrayList<>();
+            lore.add("§7Slows you down for up to §f3 seconds§7.");
+            lore.add("§7Repeatedly deals §6AOE §c3 damage §7and knocks");
+            lore.add("§7back enemies in a §f2.8-block §7radius.");
+            lore.add("§eSneak (Shift) §7to cancel early.");
+            lore.add("§8Cooldown: §f15s");
+            meta.setLore(lore);
+
+            item.setItemMeta(meta);
+        }
         return item;
     }
 
     private ItemStack createShopItem() {
         ItemStack item = new ItemStack(Material.GOLD_INGOT);
         ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName("§6§lSKLEP KLASOWY §7(Kliknij)");
-        item.setItemMeta(meta);
+        if (meta != null) {
+            meta.setDisplayName("§6§lCLASS SHOP §7(Click)");
+            item.setItemMeta(meta);
+        }
         return item;
     }
 
     private ItemStack createCosmeticArmor(Material mat, EquipmentSlot slot) {
         ItemStack item = new ItemStack(mat);
         ItemMeta meta = item.getItemMeta();
-        meta.setUnbreakable(true);
-        meta.addAttributeModifier(Attribute.GENERIC_ARMOR, new AttributeModifier(UUID.randomUUID(), "cosmetic_only", 0.0, AttributeModifier.Operation.ADD_NUMBER, slot));
-        item.setItemMeta(meta);
+        if (meta != null) {
+            meta.setUnbreakable(true);
+            meta.addAttributeModifier(Attribute.GENERIC_ARMOR, new AttributeModifier(UUID.randomUUID(), "cosmetic_only", 0.0, AttributeModifier.Operation.ADD_NUMBER, slot));
+            item.setItemMeta(meta);
+        }
         return item;
     }
 
-    private void startCooldown(Player p, ItemStack item, int seconds) {
-        item.setAmount(seconds);
+    private void startCooldown(Player p, int slot, Material material, int seconds) {
+        updateCooldownItem(p, slot, material, seconds);
+
         new BukkitRunnable() {
             int time = seconds;
+
             @Override
             public void run() {
-                if (!p.isOnline() || time <= 1) {
-                    if (p.isOnline()) { item.setAmount(1); p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 1f, 2f); }
+                if (!p.isOnline()) {
                     this.cancel();
-                } else {
-                    time--; item.setAmount(time);
+                    return;
                 }
+
+                if (time <= 1) {
+                    updateCooldownItem(p, slot, material, 1);
+                    p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 1f, 2f);
+                    this.cancel();
+                    return;
+                }
+
+                time--;
+                updateCooldownItem(p, slot, material, time);
             }
         }.runTaskTimer(plugin, 20L, 20L);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
-    public void onAttack(EntityDamageByEntityEvent e) {
-        // 1. Sprawdzamy, czy atakujący to gracz
-        if (!(e.getDamager() instanceof Player)) return;
-        Player p = (Player) e.getDamager();
+    private void updateCooldownItem(Player p, int slot, Material material, int amount) {
+        ItemStack current = p.getInventory().getItem(slot);
+        if (current == null || current.getType() != material) return;
 
-        // 2. Sprawdzamy, czy gracz ma klasę Berserker
-        if (plugin.getPlayerClass(p.getUniqueId()).contains("Berserker")) {
-
-            // 3. KLUCZOWY MOMENT: Sprawdzamy, czy ulepszenie zostało kupione w ShopManager
-            if (plugin.shopManager.hasBerserkerPassive(p.getUniqueId())) {
-
-                double maxHealth = p.getAttribute(Attribute.GENERIC_MAX_HEALTH).getValue();
-                double currentHealth = p.getHealth();
-
-                // Obliczamy brakujące HP (ratio od 0.0 do 1.0)
-                double ratio = (maxHealth - currentHealth) / maxHealth;
-
-                // Wzór: bazowy dmg * (1 + bonus).
-                // Jeśli masz 1 HP, ratio wynosi prawie 1.0, więc bijesz o 50% mocniej.
-                double bonus = ratio * 0.5;
-                e.setDamage(e.getDamage() * (1.0 + bonus));
-
-                // Opcjonalny efekt wizualny, żebyś widział, że działa (czerwone cząsteczki)
-                if (ratio > 0.1) {
-                    e.getEntity().getWorld().spawnParticle(org.bukkit.Particle.REDSTONE,
-                            e.getEntity().getLocation().add(0, 1, 0), 5, 0.2, 0.2, 0.2,
-                            new org.bukkit.Particle.DustOptions(org.bukkit.Color.RED, 1));
-                }
-            }
-        }
+        current.setAmount(amount);
+        p.getInventory().setItem(slot, current);
     }
 
     @EventHandler

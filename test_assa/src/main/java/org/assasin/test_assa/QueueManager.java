@@ -11,13 +11,11 @@ import org.bukkit.scheduler.BukkitRunnable;
 
 import java.util.*;
 
-// DODANO: Listener – bez tego eventy w tej klasie nie zadziałają
 public class QueueManager implements Listener {
 
     private final Main plugin;
     private final List<UUID> queue = new ArrayList<>();
 
-    // Śledzenie aktywnej gry 1v1
     public final Set<UUID> playersInGame = new HashSet<>();
     public UUID playerBlue;
     public UUID playerRed;
@@ -30,11 +28,11 @@ public class QueueManager implements Listener {
 
     public void joinQueue(Player p) {
         if (queue.contains(p.getUniqueId()) || playersInGame.contains(p.getUniqueId())) {
-            p.sendMessage("§c§l(!) §7Jesteś już w kolejce lub w grze!");
+            p.sendMessage("§c§l(!) §7You are already in the queue or in a match!");
             return;
         }
         queue.add(p.getUniqueId());
-        p.sendMessage("§b§l1V1 §8» §7Dołączyłeś do kolejki! (§e" + queue.size() + "§7/2)");
+        p.sendMessage("§b§l1V1 §8» §7You have joined the queue! (§e" + queue.size() + "§7/2)");
 
         if (queue.size() >= 2 && !isCountingDown) {
             startCountdown();
@@ -46,18 +44,15 @@ public class QueueManager implements Listener {
         queue.remove(p.getUniqueId());
     }
 
-    // NAPRAWIONO: Event onQuit wewnątrz klasy QueueManager
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
         Player p = e.getPlayer();
         UUID uuid = p.getUniqueId();
 
-        // Jeśli gracz wyszedł podczas walki
         if (playersInGame.contains(uuid)) {
-            endGame(p); // Druga osoba wygrywa/wraca na spawn
+            endGame(p);
         }
 
-        // Zawsze usuwamy z kolejki przy wyjściu
         leaveQueue(p);
     }
 
@@ -67,7 +62,6 @@ public class QueueManager implements Listener {
             int timer = 5;
             @Override
             public void run() {
-                // Jeśli ktoś wyszedł z kolejki w trakcie odliczania
                 if (queue.size() < 2) {
                     isCountingDown = false;
                     this.cancel();
@@ -78,7 +72,7 @@ public class QueueManager implements Listener {
                     for (UUID uuid : queue) {
                         Player p = Bukkit.getPlayer(uuid);
                         if (p != null) {
-                            p.sendMessage("§b§l1V1 §8» §7Start za: §e" + timer + "s");
+                            p.sendMessage("§b§l1V1 §8» §7Starting in: §e" + timer + "s");
                             p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 1f, 1f);
                         }
                     }
@@ -101,13 +95,11 @@ public class QueueManager implements Listener {
         playersInGame.add(playerRed);
         queue.clear();
 
-        // Teleportacja i setup
         setupPlayer(Bukkit.getPlayer(playerBlue), new Location(Bukkit.getWorld("world"), 295.54, 113.0, -282.450, 0f, 0f));
         setupPlayer(Bukkit.getPlayer(playerRed), new Location(Bukkit.getWorld("world"), 295.48, 113.0, -261.60, -180.13f, 2.68f));
 
         isCountingDown = false;
 
-        // 5 sekund na wybór klasy (100 ticków)
         new BukkitRunnable() {
             @Override
             public void run() {
@@ -120,25 +112,22 @@ public class QueueManager implements Listener {
         if (p == null) return;
         p.teleport(loc);
         p.getInventory().clear();
-        plugin.openClassMenu(p); // Wywołuje metodę w Main, która otwiera GUI
-        p.sendMessage("§6§l1V1 §8» §eMasz 5 sekund na wybór klasy!");
+        plugin.openClassMenu(p);
+        p.sendMessage("§6§l1V1 §8» §eYou have 5 seconds to choose your class!");
     }
 
     private void checkKitsAfterStart() {
-        // Używamy kopii setu, aby uniknąć ConcurrentModificationException
         Set<UUID> currentPlayers = new HashSet<>(playersInGame);
 
         for (UUID uuid : currentPlayers) {
             Player p = Bukkit.getPlayer(uuid);
             if (p != null) {
-                // Sprawdzamy czy gracz ma klasę (Main.getPlayerClass zwraca "§7Brak" jeśli nie ma)
                 if (plugin.getPlayerClass(uuid).contains("Brak")) {
                     String[] kits = {"minotaur", "paladyn", "assasyn", "hunter", "berserker"};
                     String randomKit = kits[new Random().nextInt(kits.length)];
 
-                    // Nadajemy kit komendą lub bezpośrednio
                     p.performCommand("kit " + randomKit);
-                    p.sendMessage("§c§l(!) §7Czas minął! Wylosowano klasę: §e" + randomKit);
+                    p.sendMessage("§c§l(!) §7Time's up! Randomly selected class: §e" + randomKit);
                     p.closeInventory();
                 }
             }
@@ -146,19 +135,17 @@ public class QueueManager implements Listener {
     }
 
     public void endGame(Player loser) {
-        // Kopiujemy set, aby bezpiecznie iterować podczas czyszczenia
         Set<UUID> gamePlayers = new HashSet<>(playersInGame);
 
         for (UUID uuid : gamePlayers) {
             Player p = Bukkit.getPlayer(uuid);
             if (p != null) {
-                p.sendMessage("§c§lKONIEC GRY! §7Powrót na lobby...");
-                plugin.giveLobbyItems(p); // Czyści EQ i zdejmuje klasę
-                plugin.teleportToMainSpawn(p); // Wraca na główne kordy spawnu
+                p.sendMessage("§c§lGAME OVER! §7Returning to lobby...");
+                plugin.giveLobbyItems(p);
+                plugin.teleportToMainSpawn(p);
             }
         }
 
-        // Resetujemy stan managera
         playersInGame.clear();
         playerBlue = null;
         playerRed = null;
